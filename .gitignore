@@ -1,0 +1,23 @@
+# Raw dataset archives and extracted files (re-download with scripts/download_mrclam.py)
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Results and figures are tracked on purpose: they are the deliverable.
+!results/
+!figures/
