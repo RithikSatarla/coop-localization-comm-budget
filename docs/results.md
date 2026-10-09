@@ -1,9 +1,10 @@
 # How much inter-robot communication does cooperative localization need?
 
 Results of constraining teammate message exchange in a cooperative EKF on the
-UTIAS Multi-Robot Cooperative Localization and Mapping (MR.CLAM) datasets 1-4.
-Every number and figure in this document was produced by `run_experiments.py`
-in this repository; the raw per-run rows are in `results/*.csv`.
+UTIAS Multi-Robot Cooperative Localization and Mapping (MR.CLAM) datasets 1-4,
+with a diagnosed failure case on dataset 9. Every number and figure in this
+document was produced by `run_experiments.py` in this repository; the raw
+per-run rows are in `results/*.csv`.
 
 ## 1. Research question
 
@@ -13,23 +14,31 @@ communicated. Communication is the scarce resource in a multi-robot system, so
 the question studied here is:
 
 > On real multi-robot data, how does localization accuracy degrade as the
-> number of teammate messages a robot may use is reduced, and where is the
-> knee of that curve?
+> number of teammate messages a robot may use is reduced, which simple policy
+> for choosing the messages degrades least, and where is the knee of that curve?
 
-Three ways of reducing communication are compared because they remove
+Four ways of reducing communication are compared because they remove
 different messages: random loss removes messages uniformly, a comm radius
-removes the long-range ones, and a rate limit removes the ones that arrive in
-bursts.
+removes the long-range ones, a rate limit removes the ones that arrive in
+bursts, and a covariance-threshold trigger keeps only the messages that arrive
+while the receiver is uncertain. Random loss on this dataset has been swept
+before (Chang, Chen and Mehta 2022 vary a link-failure probability on
+sub-dataset 9; Luft et al. 2018 vary the fraction of processed relative
+measurements); the drop sweep here replicates that kind of knob on datasets
+1-4, and the contribution of this study is the comparison of policy families
+at matched delivered-message rate, the map-blind split, the knee in delivered
+messages, and a reproducible pipeline.
 
 ## 2. Data
 
 MR.CLAM (Leung et al., 2011) was recorded with five iRobot-Create-based robots
 driving to random waypoints in a 15 m x 8 m room with 15 cylindrical landmarks.
-Each robot logs velocity commands (odometry) at about 67-100 Hz and detects
+Each robot logs velocity commands (odometry) at about 67 Hz and detects
 barcodes on landmarks and other robots with a monocular camera, giving range
-and bearing measurements. A Vicon system provides ground truth at about 100 Hz
-with millimetre accuracy. Datasets 1-4 are used (durations 1500, 1861, 1800 and
-1400 s on the common grid).
+and bearing measurements. A Vicon system provides ground truth at 100 Hz with
+accuracy of the order of 1e-3 m. Datasets 1-4 are used for the main study
+(durations 1500, 1861, 1800 and 1400 s on the common grid); the first 500 s of
+dataset 9 (the one with barriers) were run separately (Section 5.6).
 
 File layout, verified against the official page:
 
@@ -43,29 +52,30 @@ File layout, verified against the official page:
 
 Robots are subjects 1-5 and landmarks are subjects 6-20. The measurement file
 stores barcode numbers, which are mapped back to subjects through
-`Barcodes.dat`; the mapping differs between datasets 1-2 and 3-4.
+`Barcodes.dat`; the mapping differs between datasets.
 
 ### 2.1 Preprocessing (`src/loader.py`)
 
 * **Uniform grid.** All streams are resampled to a 0.02 s grid spanning the
   common ground-truth interval of the five robots. Odometry is zero-order held;
   a command older than 1.5 s is replaced by zero velocity (the logs contain
-  occasional one-second gaps, and in dataset 3 robot 4's odometry stops 288 s
-  before the end while the robot is stationary). Ground truth is linearly
+  occasional one-second gaps, and in dataset 3 robot 4's odometry stops about
+  290 s before the end while the robot is stationary). Ground truth is linearly
   interpolated with the heading unwrapped first. Measurements are assigned to
   the nearest grid step.
 * **Ground-truth dropout masking.** Gaps longer than 0.5 s between consecutive
   Vicon samples are treated as tracking dropouts and the grid points inside
-  them are excluded from scoring. The only large dropout is 116.8 s for robot 3
-  in dataset 3; all others are under 2 s. Masked seconds per robot are in the
-  `gt_dropout_s` column below.
+  them are excluded from scoring. The only large dropout in datasets 1-4 is
+  116.8 s for robot 3 in dataset 3; all others are under 2 s. Masked seconds
+  per robot are in the `gt_dropout_s` column below.
 * **Unknown barcodes.** Measurements whose barcode is not listed in
-  `Barcodes.dat` (3, 11, 16 and 9 rows in datasets 1-4) are dropped, as are
-  the rare rows in which a robot reports seeing its own barcode.
+  `Barcodes.dat` (3, 11, 16 and 9 rows in datasets 1-4, 2 in the dataset-9
+  window) are dropped, as are the rare rows in which a robot reports seeing
+  its own barcode.
 
 ### 2.2 Dataset summary
 
-*Table 1. Per-robot summary of the resampled datasets. `odom_missing_s` counts grid seconds without a recent odometry command (replaced by zero velocity).*
+*Table 1. Per-robot summary of the resampled datasets 1-4. `odom_missing_s` counts grid seconds without a recent odometry command (replaced by zero velocity).*
 
 | dataset | robot | duration_s | landmark_obs | robot_obs | robot_obs_per_min | robot_range_median_m | robot_range_max_m | gt_dropout_s | odom_missing_s |
 |---|---|---|---|---|---|---|---|---|---|
@@ -92,8 +102,8 @@ stores barcode numbers, which are mapped back to subjects through
 
 `robot_obs` counts robot-to-robot observations, which are the candidate
 messages for the cooperative filter: typically 30-80 per robot per minute
-(extremes: 5.4 for robot 4 in dataset 3 and 100 for robot 5 in dataset 4) at
-median ranges of 2.1-3.5 m.
+(extremes: 5.37 for robot 4 in dataset 3 and 100.11 for robot 5 in dataset 4)
+at median ranges of 2.07-3.49 m.
 
 ## 3. Methods
 
@@ -106,8 +116,8 @@ Odometry noise is specified as spectral densities (sigma_v = 0.05 m/s/sqrt(Hz),
 sigma_w = 0.10 rad/s/sqrt(Hz), plus a small heading random walk of
 0.002 rad/sqrt(s)), measurement noise as sigma_r = 0.15 m and
 sigma_phi = 0.05 rad. Every update is gated at the 99 % chi-square level
-(2 dof). These values were fixed a priori and are identical for every dataset,
-regime and method.
+(2 dof, threshold 9.21). These values were fixed a priori and are identical
+for every dataset, regime and method.
 
 ### 3.2 Estimators (`src/localize.py`)
 
@@ -118,7 +128,7 @@ regime and method.
   robot i observes teammate j, j's *current estimate* is used as the observed
   point. Because the filters do not track cross-covariances between robots,
   the teammate information is fused with split covariance intersection
-  (Julier and Uhlmann, 2001; used for cooperative localization by
+  (Julier and Uhlmann, 1997; 2001; used for cooperative localization by
   Carrillo-Arce et al., 2013): the receiver's prior covariance is scaled by
   1/omega and the teammate's position covariance by 1/(1 - omega), the
   independent sensor noise R is left unscaled, and omega is chosen from a grid
@@ -138,7 +148,8 @@ a-priori noise values are conservative: range noise is 0.07-0.18 m depending on
 range, bearing noise is about 0.01 rad, and robot-to-robot ranges carry a
 systematic +0.04 to +0.05 m bias because the barcode sits ahead of the robot's
 tracked centre. Dataset 1 also contains about 13 % landmark outliers
-(mis-detections), which is why the innovation gate matters.
+(mis-detections), which is why the innovation gate matters there (and why it
+hurts on dataset 9, Section 5.6).
 
 *Table 2. Measurement residuals against ground truth (median bias, MAD-based standard deviation, inlier fraction with |range residual| < 1 m and |bearing residual| < 0.3 rad). Range bands are in `results/measurement_residuals.csv`.*
 
@@ -156,13 +167,25 @@ tracked centre. Dataset 1 also contains about 13 % landmark outliers
 ### 3.4 Communication constraints (`src/comm.py`)
 
 A robot-to-robot observation can only be fused if the observed teammate's
-state message is delivered. Three constraint families:
+state message is delivered. Four constraint families:
 
 | family | settings | what it removes |
 |---|---|---|
 | message drop probability p | 0, 0.25, 0.5, 0.75, 0.9, 1.0 | messages at random (seeded; 5 seeds per setting) |
-| comm radius on measured range | 1, 2, 4, 8 m, unlimited | long-range messages |
+| comm radius on measured range | 1, 2, 4, 8 m, unlimited | long-range messages (deterministic) |
 | max update rate | at most one teammate update per robot per 1, 5, 10, 30 s, never | bursts of messages (deterministic) |
+| covariance-threshold trigger tau | 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10 m^2 | messages that arrive while the receiver is already certain (deterministic) |
+
+The trigger is a receiver-side request: robot i fuses a teammate message only
+while the trace of its own position covariance exceeds tau, evaluated just
+before the candidate fusion; because a fusion shrinks that covariance, the
+trigger switches itself off until odometry has grown it again. It is
+deliberately the simplest member of the event-triggered family (no innovation
+test, no adaptive threshold, no implicit information from the absence of a
+message) and is not a reimplementation of any published adaptive scheme. The
+tau grid was chosen from a calibration run on dataset 1 so that the delivered
+rate spans roughly 1 to 50 messages per robot per minute in the map-blind
+regime.
 
 **Message accounting.** For every run the number of candidate observations,
 messages delivered, fused, gated (rejected by the innovation gate) and
@@ -188,16 +211,21 @@ median, 95th percentile and final error are also stored in the CSVs.
 
 ## 4. Experimental protocol
 
-Per dataset and regime: one dead-reckoning pass and 43 cooperative-filter
-runs (no messages, unconstrained with covariance intersection, unconstrained
-with naive fusion, 6 drop probabilities x 5 seeds, 5 comm radii, 5 update
-rates). That is 86 filter runs per dataset and 344 in total, each a joint
-five-robot filter over 70,000-93,068 grid steps at dt = 0.02 s. The four
-datasets run in parallel worker processes; one dataset takes 11-14 minutes and
-the whole protocol 13.5 minutes of wall time on a 16-core laptop
+Per dataset and regime: one dead-reckoning pass and 51 cooperative-filter runs
+(no messages, unconstrained with covariance intersection, unconstrained with
+naive fusion, 6 drop probabilities x 5 seeds, 5 comm radii, 5 update rates,
+8 trigger thresholds). That is 102 filter runs per dataset and
+408 in total for datasets 1-4, each a joint five-robot filter over
+70,000-93,068 grid steps at dt = 0.02 s. The four datasets run in parallel
+worker processes; one dataset takes 17.8-21.0 minutes and the
+whole protocol 21.0 minutes of wall time on a 16-core laptop
 (`results/run_metadata.json` records the exact timings, versions and
-parameters of the run that produced the committed results). The run was
-executed twice from scratch and produced byte-identical CSVs.
+parameters of the run that produced the committed results). The protocol
+without the trigger family was executed twice from scratch and produced
+byte-identical CSVs; the run that added the trigger family reproduced every
+pre-existing CSV byte for byte. The dataset-9 window was run separately with
+the same parameters (102 filter runs, 401 s,
+`results/dataset9_500s/`).
 
 Filter parameters (fixed a priori, `src/localize.py: NoiseParams`):
 
@@ -436,33 +464,234 @@ Per dataset (team position RMSE [m]):
 | map_blind | 30 s | 0.978 | 0.655 | 0.982 | 0.324 |
 | map_blind | inf | 2.97 | 2.992 | 2.956 | 1.97 |
 
+![RMSE vs trigger threshold](../figures/rmse_vs_trigger.png)
+
+*Figure 7. Team RMSE versus the covariance-threshold trigger tau. In the
+map-blind regime the mean rises from 0.485 m (tau = 0.003, 50.161 messages per
+robot per minute) to 0.765 m (tau = 1, 4.903), 1.084 m (tau = 3, 2.411) and
+1.309 m (tau = 10, 1.992).*
+
+*Table 9. Trigger sweep.*
+
+| regime | setting | messages_per_robot_min | message_fraction | rmse_xy | rmse_xy_std_datasets | rmse_xy_blind | rmse_theta |
+|---|---|---|---|---|---|---|---|
+| full_map | tau=0.003 | 43.756 | 0.822 | 0.152 | 0.042 |  | 0.086 |
+| full_map | tau=0.01 | 8.529 | 0.158 | 0.151 | 0.04 |  | 0.086 |
+| full_map | tau=0.03 | 1.46 | 0.027 | 0.152 | 0.041 |  | 0.087 |
+| full_map | tau=0.1 | 0.335 | 0.006 | 0.151 | 0.041 |  | 0.087 |
+| full_map | tau=0.3 | 0.024 | 0.000427 | 0.152 | 0.041 |  | 0.087 |
+| full_map | tau=1 | 0.004 | 6.72e-05 | 0.153 | 0.043 |  | 0.088 |
+| full_map | tau=3 | 0.004 | 6.72e-05 | 0.152 | 0.042 |  | 0.088 |
+| full_map | tau=10 | 0 | 0 | 0.153 | 0.042 |  | 0.088 |
+| map_blind | tau=0.003 | 50.161 | 0.943 | 0.485 | 0.312 | 0.719 | 0.238 |
+| map_blind | tau=0.01 | 36.724 | 0.689 | 0.485 | 0.311 | 0.719 | 0.239 |
+| map_blind | tau=0.03 | 33.609 | 0.631 | 0.49 | 0.32 | 0.727 | 0.24 |
+| map_blind | tau=0.1 | 24.736 | 0.464 | 0.553 | 0.405 | 0.831 | 0.261 |
+| map_blind | tau=0.3 | 10.178 | 0.194 | 0.505 | 0.293 | 0.752 | 0.258 |
+| map_blind | tau=1 | 4.903 | 0.094 | 0.765 | 0.443 | 1.184 | 0.346 |
+| map_blind | tau=3 | 2.411 | 0.046 | 1.084 | 0.418 | 1.717 | 0.49 |
+| map_blind | tau=10 | 1.992 | 0.038 | 1.309 | 0.368 | 2.091 | 0.57 |
+
+Per dataset (team position RMSE [m]):
+
+| regime | setting | dataset 1 | dataset 2 | dataset 3 | dataset 4 |
+|---|---|---|---|---|---|
+| full_map | tau=0.003 | 0.19 | 0.186 | 0.123 | 0.111 |
+| full_map | tau=0.01 | 0.183 | 0.188 | 0.122 | 0.111 |
+| full_map | tau=0.03 | 0.184 | 0.19 | 0.121 | 0.111 |
+| full_map | tau=0.1 | 0.181 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=0.3 | 0.182 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=1 | 0.186 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=3 | 0.184 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=10 | 0.185 | 0.193 | 0.121 | 0.111 |
+| map_blind | tau=0.003 | 0.352 | 0.361 | 0.95 | 0.277 |
+| map_blind | tau=0.01 | 0.357 | 0.359 | 0.948 | 0.277 |
+| map_blind | tau=0.03 | 0.357 | 0.361 | 0.968 | 0.276 |
+| map_blind | tau=0.1 | 0.359 | 0.378 | 1.159 | 0.316 |
+| map_blind | tau=0.3 | 0.366 | 0.401 | 0.941 | 0.313 |
+| map_blind | tau=1 | 0.709 | 0.511 | 1.406 | 0.433 |
+| map_blind | tau=3 | 1.508 | 0.715 | 1.379 | 0.735 |
+| map_blind | tau=10 | 1.146 | 0.894 | 1.743 | 1.453 |
+
 ### 5.4 Accuracy versus messages used
 
 ![Accuracy vs messages](../figures/accuracy_vs_messages.png)
 
-*Figure 7. Team RMSE against messages delivered per robot per minute, pooling
-all three constraint families (mean over datasets). The grey line is the lower
+*Figure 8. Team RMSE against messages delivered per robot per minute, pooling
+all four constraint families (mean over datasets). The grey line is the lower
 envelope; the star marks its knee (largest distance below the chord between
-the end points in normalised coordinates).*
+the end points in normalised coordinates). For legibility only the rate and
+trigger settings and the discussed drop and radius settings are labeled; all
+values are in Tables 6-9.*
 
-*Table 9. Knee of the pooled accuracy-versus-messages curve per regime. `fraction_of_gain` is the share of the no-comm to full-comm RMSE reduction achieved at the knee. In the full-map regime the envelope drops by less than 5 %, so no knee is reported.*
+*Table 10. Knee of the accuracy-versus-messages curve per regime, for the pooled curve and for each family on its own. `fraction_of_gain` is the share of the no-comm to full-comm RMSE reduction achieved at the knee (for a single family, relative to that family's largest-budget point). In the full-map regime the envelope drops by less than 5 %, so no knee is reported.*
 
-| knee_found | regime | rmse_xy_full_comm | rmse_xy_no_comm | messages_per_robot_min_full_comm | family | setting | messages_per_robot_min | rmse_xy | message_fraction | fraction_of_gain |
+| knee_found | scope | regime | rmse_xy_full_comm | rmse_xy_no_comm | messages_per_robot_min_full_comm | family | setting | messages_per_robot_min | rmse_xy | message_fraction | fraction_of_gain |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| False | pooled | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
+| False | drop | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
+| False | radius | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
+| False | rate | full_map | 0.15 | 0.153 | 13.48 |  |  |  |  |  |  |
+| False | trigger | full_map | 0.152 | 0.153 | 43.756 |  |  |  |  |  |  |
+| True | pooled | map_blind | 0.485 | 2.722 | 53.234 | rate | 10 s | 2.455 | 0.492 | 0.046 | 0.997 |
+| True | drop | map_blind | 0.485 | 2.722 | 53.234 | drop | p=0.9 | 5.395 | 0.696 | 0.101 | 0.906 |
+| True | radius | map_blind | 0.485 | 2.722 | 53.234 | radius | 2 m | 17.556 | 1.003 | 0.329 | 0.768 |
+| True | rate | map_blind | 0.428 | 2.722 | 13.48 | rate | 10 s | 2.455 | 0.492 | 0.046 | 0.972 |
+| True | trigger | map_blind | 0.485 | 2.722 | 50.161 | trigger | tau=0.3 | 10.178 | 0.505 | 0.194 | 0.991 |
+
+### 5.5 Matched-budget comparison: trigger versus the other families
+
+*Table 11. Each trigger setting paired with the setting of each other family whose delivered-message rate is nearest (in log ratio; zero-message settings excluded). `rmse_difference` is trigger minus the paired setting; positive means the trigger is worse. Map-blind regime.*
+
+| regime | trigger_setting | trigger_messages_per_robot_min | trigger_rmse_xy | family | setting | messages_per_robot_min | rmse_xy | budget_ratio | rmse_difference |
+|---|---|---|---|---|---|---|---|---|---|
+| map_blind | tau=0.003 | 50.161 | 0.485 | rate | 1 s | 13.48 | 0.428 | 3.721 | 0.057 |
+| map_blind | tau=0.003 | 50.161 | 0.485 | drop | p=0 | 53.234 | 0.485 | 0.942 | 4.84e-06 |
+| map_blind | tau=0.003 | 50.161 | 0.485 | radius | 8 m | 53.216 | 0.485 | 0.943 | 3.25e-06 |
+| map_blind | tau=0.01 | 36.724 | 0.485 | rate | 1 s | 13.48 | 0.428 | 2.724 | 0.058 |
+| map_blind | tau=0.01 | 36.724 | 0.485 | drop | p=0.25 | 39.775 | 0.488 | 0.923 | -0.003 |
+| map_blind | tau=0.01 | 36.724 | 0.485 | radius | 4 m | 44.875 | 0.558 | 0.818 | -0.073 |
+| map_blind | tau=0.03 | 33.609 | 0.49 | rate | 1 s | 13.48 | 0.428 | 2.493 | 0.063 |
+| map_blind | tau=0.03 | 33.609 | 0.49 | drop | p=0.25 | 39.775 | 0.488 | 0.845 | 0.002 |
+| map_blind | tau=0.03 | 33.609 | 0.49 | radius | 4 m | 44.875 | 0.558 | 0.749 | -0.067 |
+| map_blind | tau=0.1 | 24.736 | 0.553 | rate | 1 s | 13.48 | 0.428 | 1.835 | 0.125 |
+| map_blind | tau=0.1 | 24.736 | 0.553 | drop | p=0.5 | 26.572 | 0.533 | 0.931 | 0.02 |
+| map_blind | tau=0.1 | 24.736 | 0.553 | radius | 2 m | 17.556 | 1.003 | 1.409 | -0.45 |
+| map_blind | tau=0.3 | 10.178 | 0.505 | rate | 1 s | 13.48 | 0.428 | 0.755 | 0.078 |
+| map_blind | tau=0.3 | 10.178 | 0.505 | drop | p=0.75 | 13.447 | 0.521 | 0.757 | -0.016 |
+| map_blind | tau=0.3 | 10.178 | 0.505 | radius | 2 m | 17.556 | 1.003 | 0.58 | -0.498 |
+| map_blind | tau=1 | 4.903 | 0.765 | rate | 5 s | 4.17 | 0.445 | 1.176 | 0.32 |
+| map_blind | tau=1 | 4.903 | 0.765 | drop | p=0.9 | 5.395 | 0.696 | 0.909 | 0.069 |
+| map_blind | tau=1 | 4.903 | 0.765 | radius | 2 m | 17.556 | 1.003 | 0.279 | -0.239 |
+| map_blind | tau=3 | 2.411 | 1.084 | rate | 10 s | 2.455 | 0.492 | 0.982 | 0.592 |
+| map_blind | tau=3 | 2.411 | 1.084 | drop | p=0.9 | 5.395 | 0.696 | 0.447 | 0.389 |
+| map_blind | tau=3 | 2.411 | 1.084 | radius | 1 m | 0.493 | 2.864 | 4.893 | -1.779 |
+| map_blind | tau=10 | 1.992 | 1.309 | rate | 10 s | 2.455 | 0.492 | 0.811 | 0.817 |
+| map_blind | tau=10 | 1.992 | 1.309 | drop | p=0.9 | 5.395 | 0.696 | 0.369 | 0.613 |
+| map_blind | tau=10 | 1.992 | 1.309 | radius | 1 m | 0.493 | 2.864 | 4.043 | -1.555 |
+
+*Table 11b. The same pairing in the full-map regime, where every setting lies within 0.149-0.153 m.*
+
+| regime | trigger_setting | trigger_messages_per_robot_min | trigger_rmse_xy | family | setting | messages_per_robot_min | rmse_xy | budget_ratio | rmse_difference |
+|---|---|---|---|---|---|---|---|---|---|
+| full_map | tau=0.003 | 43.756 | 0.152 | rate | 1 s | 13.48 | 0.15 | 3.246 | 0.003 |
+| full_map | tau=0.003 | 43.756 | 0.152 | drop | p=0.25 | 39.775 | 0.151 | 1.1 | 0.002 |
+| full_map | tau=0.003 | 43.756 | 0.152 | radius | 4 m | 44.875 | 0.151 | 0.975 | 0.002 |
+| full_map | tau=0.01 | 8.529 | 0.151 | rate | 1 s | 13.48 | 0.15 | 0.633 | 0.000914 |
+| full_map | tau=0.01 | 8.529 | 0.151 | drop | p=0.75 | 13.447 | 0.15 | 0.634 | 0.000352 |
+| full_map | tau=0.01 | 8.529 | 0.151 | radius | 2 m | 17.556 | 0.149 | 0.486 | 0.002 |
+| full_map | tau=0.03 | 1.46 | 0.152 | rate | 30 s | 1.096 | 0.152 | 1.332 | -0.000167 |
+| full_map | tau=0.03 | 1.46 | 0.152 | drop | p=0.9 | 5.395 | 0.151 | 0.271 | 0.000877 |
+| full_map | tau=0.03 | 1.46 | 0.152 | radius | 1 m | 0.493 | 0.153 | 2.964 | -0.000959 |
+| full_map | tau=0.1 | 0.335 | 0.151 | rate | 30 s | 1.096 | 0.152 | 0.306 | -0.000264 |
+| full_map | tau=0.1 | 0.335 | 0.151 | drop | p=0.9 | 5.395 | 0.151 | 0.062 | 0.000781 |
+| full_map | tau=0.1 | 0.335 | 0.151 | radius | 1 m | 0.493 | 0.153 | 0.681 | -0.001 |
+| full_map | tau=0.3 | 0.024 | 0.152 | rate | 30 s | 1.096 | 0.152 | 0.021 | 2.96e-05 |
+| full_map | tau=0.3 | 0.024 | 0.152 | drop | p=0.9 | 5.395 | 0.151 | 0.004 | 0.001 |
+| full_map | tau=0.3 | 0.024 | 0.152 | radius | 1 m | 0.493 | 0.153 | 0.048 | -0.000763 |
+| full_map | tau=1 | 0.004 | 0.153 | rate | 30 s | 1.096 | 0.152 | 0.003 | 0.001 |
+| full_map | tau=1 | 0.004 | 0.153 | drop | p=0.9 | 5.395 | 0.151 | 0.000669 | 0.002 |
+| full_map | tau=1 | 0.004 | 0.153 | radius | 1 m | 0.493 | 0.153 | 0.007 | 0.000465 |
+| full_map | tau=3 | 0.004 | 0.152 | rate | 30 s | 1.096 | 0.152 | 0.003 | 0.000681 |
+| full_map | tau=3 | 0.004 | 0.152 | drop | p=0.9 | 5.395 | 0.151 | 0.000669 | 0.002 |
+| full_map | tau=3 | 0.004 | 0.152 | radius | 1 m | 0.493 | 0.153 | 0.007 | -0.000112 |
+
+### 5.6 Dataset 9, first 500 s: a diagnosed failure of the fixed protocol
+
+Chang, Chen and Mehta (2022) report RMSE against communication link failure
+probability on the first 500 s of sub-dataset 9, so the same window was run
+here with the unchanged protocol. The fixed-parameter landmark EKF itself fails
+on this window (Table 12), so the sweeps (Table 13 and
+`results/dataset9_500s/`) are not interpretable as a budget curve and are not
+compared with published dataset-9 numbers.
+
+*Table 12. Base methods on the first 500 s of dataset 9 (team position RMSE [m]).*
+
+| regime | dataset | Dead reckoning | EKF landmarks | EKF cooperative |
+|---|---|---|---|---|
+| full_map | 9 | 5.721 | 3.621 | 3.719 |
+| map_blind | 9 | 5.721 | 5.337 | 5.41 |
+
+*Table 13. Drop-probability sweep on the same window (team RMSE [m], 5 seeds per setting); included only for completeness.*
+
+| regime | setting | messages_per_robot_min | message_fraction | rmse_xy | rmse_xy_std_datasets | rmse_xy_blind | rmse_theta |
+|---|---|---|---|---|---|---|---|
+| full_map | p=0 | 55.534 | 1 | 3.719 |  |  | 1.129 |
+| full_map | p=0.25 | 41.379 | 0.745 | 3.248 |  |  | 1.045 |
+| full_map | p=0.5 | 27.68 | 0.498 | 3.365 |  |  | 1.073 |
+| full_map | p=0.75 | 13.996 | 0.252 | 3.303 |  |  | 1.061 |
+| full_map | p=0.9 | 5.702 | 0.103 | 3.606 |  |  | 1.15 |
+| full_map | p=1 | 0 | 0 | 3.621 |  |  | 1.142 |
+| map_blind | p=0 | 55.534 | 1 | 5.41 |  | 5.681 | 1.493 |
+| map_blind | p=0.25 | 41.379 | 0.745 | 5.728 |  | 6.125 | 1.636 |
+| map_blind | p=0.5 | 27.68 | 0.498 | 5.538 |  | 6.087 | 1.631 |
+| map_blind | p=0.75 | 13.996 | 0.252 | 5.637 |  | 6.225 | 1.561 |
+| map_blind | p=0.9 | 5.702 | 0.103 | 5.744 |  | 6.531 | 1.565 |
+| map_blind | p=1 | 0 | 0 | 5.337 |  | 6.045 | 1.485 |
+
+Per dataset (team position RMSE [m]):
+
+| regime | setting | dataset 9 |
+|---|---|---|
+| full_map | p=0 | 3.719 |
+| full_map | p=0.25 | 3.248 |
+| full_map | p=0.5 | 3.365 |
+| full_map | p=0.75 | 3.303 |
+| full_map | p=0.9 | 3.606 |
+| full_map | p=1 | 3.621 |
+| map_blind | p=0 | 5.41 |
+| map_blind | p=0.25 | 5.728 |
+| map_blind | p=0.5 | 5.538 |
+| map_blind | p=0.75 | 5.637 |
+| map_blind | p=0.9 | 5.744 |
+| map_blind | p=1 | 5.337 |
+
+*Table 14. Gate diagnosis (`scripts/dataset9_gate_check.py`): landmark-only EKF per robot with the protocol's innovation gate and with the gate disabled, on the first 500 s of datasets 9 and 1. `v_max_mps` and `w_max_radps` are the peak commanded speeds in the window.*
+
+| dataset | window_s | robot | gate | v_max_mps | w_max_radps | rmse_xy | median_xy | max_xy | landmark_updates_accepted | landmark_updates_rejected |
 |---|---|---|---|---|---|---|---|---|---|---|
-| False | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
-| True | map_blind | 0.485 | 2.722 | 53.234 | rate | 10 s | 2.455 | 0.492 | 0.046 | 0.997 |
+| 9 | 500 | 1 | protocol gate (9.21) | 0.165 | 1.003 | 6.819 | 5.341 | 13.02 | 498 | 1521 |
+| 9 | 500 | 1 | gate disabled | 0.165 | 1.003 | 0.107 | 0.074 | 0.287 | 2019 | 0 |
+| 9 | 500 | 2 | protocol gate (9.21) | 0.167 | 1.047 | 1.731 | 0.294 | 5.145 | 1290 | 835 |
+| 9 | 500 | 2 | gate disabled | 0.167 | 1.047 | 0.125 | 0.1 | 0.277 | 2125 | 0 |
+| 9 | 500 | 3 | protocol gate (9.21) | 0.165 | 1.003 | 1.083 | 0.107 | 4.565 | 1483 | 472 |
+| 9 | 500 | 3 | gate disabled | 0.165 | 1.003 | 0.11 | 0.093 | 0.337 | 1955 | 0 |
+| 9 | 500 | 4 | protocol gate (9.21) | 0.165 | 1.003 | 4.101 | 2.637 | 7.432 | 432 | 359 |
+| 9 | 500 | 4 | gate disabled | 0.165 | 1.003 | 0.145 | 0.136 | 0.709 | 791 | 0 |
+| 9 | 500 | 5 | protocol gate (9.21) | 0.165 | 1.003 | 4.369 | 4.145 | 8.43 | 553 | 1606 |
+| 9 | 500 | 5 | gate disabled | 0.165 | 1.003 | 0.118 | 0.081 | 0.486 | 2159 | 0 |
+| 1 | 500 | 1 | protocol gate (9.21) | 0.086 | 0.408 | 0.154 | 0.089 | 0.617 | 1356 | 317 |
+| 1 | 500 | 1 | gate disabled | 0.086 | 0.408 | 1.709 | 0.336 | 5.215 | 1673 | 0 |
+| 1 | 500 | 2 | protocol gate (9.21) | 0.086 | 0.57 | 0.141 | 0.105 | 0.57 | 1488 | 212 |
+| 1 | 500 | 2 | gate disabled | 0.086 | 0.57 | 1.289 | 0.568 | 4.286 | 1700 | 0 |
+| 1 | 500 | 3 | protocol gate (9.21) | 0.086 | 0.408 | 0.135 | 0.077 | 0.443 | 1816 | 237 |
+| 1 | 500 | 3 | gate disabled | 0.086 | 0.408 | 1.242 | 0.662 | 4.082 | 2053 | 0 |
+| 1 | 500 | 4 | protocol gate (9.21) | 0.086 | 0.57 | 0.178 | 0.144 | 0.502 | 912 | 170 |
+| 1 | 500 | 4 | gate disabled | 0.086 | 0.57 | 1.189 | 0.303 | 3.491 | 1082 | 0 |
+| 1 | 500 | 5 | protocol gate (9.21) | 0.086 | 0.57 | 0.165 | 0.108 | 0.953 | 2211 | 432 |
+| 1 | 500 | 5 | gate disabled | 0.086 | 0.57 | 1.865 | 0.554 | 6.143 | 2643 | 0 |
+
+With the gate disabled the landmark EKF reaches 0.107-0.145 m on all five
+robots of dataset 9; with the protocol gate it rejects 359-1606 of 791-2159
+landmark updates per robot and drifts to 1.083-6.819 m. The window has peak
+commanded speeds of 0.165-0.167 m/s and 1.003-1.047 rad/s against 0.086 m/s
+and 0.408-0.570 rad/s in dataset 1. On dataset 1 the same check shows the
+opposite dependence: disabling the gate raises the RMSE from 0.135-0.178 m to
+1.189-1.865 m, because of the landmark mis-detections documented in Table 2.
+The fixed gate is therefore a protocol-level sensitivity (Section 7); the
+protocol was not retuned for dataset 9.
 
 ## 6. Findings
 
 1. **With the full landmark map, teammate messages are worthless.** Unconstrained
    cooperation (53 messages per robot per minute) gives a team RMSE of 0.152 m
-   against 0.153 m with no messages at all, and all 16 constrained settings lie
-   within 0.149-0.153 m (Figures 4-7, left panels). Per dataset the landmark
-   EKF already reaches 0.111-0.193 m, close to the sensor floor set by the
-   0.07-0.18 m range noise, and covariance intersection declines 56-59 % of the
-   delivered messages as carrying no information the receiver does not already
-   have. In the standard known-map task the answer to the research question is
-   zero.
+   against 0.153 m with no messages at all, and all 24 constrained settings of
+   the four families lie within 0.149-0.153 m (Figures 4-8, left panels). Per
+   dataset the landmark EKF already reaches 0.111-0.193 m, close to the sensor
+   floor set by the 0.07-0.18 m range noise, and covariance intersection
+   declines 56-59 % of the delivered messages as carrying no information the
+   receiver does not already have. In the standard known-map task the answer to
+   the research question is zero.
 
 2. **Without map access, messages are what localizes a robot.** For the three
    map-blind robots the position RMSE falls from 4.45 m with odometry only to
@@ -474,27 +703,41 @@ the end points in normalised coordinates).*
    help a robot that rarely sees a teammate: observation opportunities, not
    bandwidth, are its binding constraint.
 
-3. **The knee is at about 2.5 messages per robot per minute.** Limiting each
-   robot to one teammate update per 10 s delivers 4.6 % of the available
-   messages and yields 0.492 m team RMSE, 99.7 % of the gain of unconstrained
-   messaging (Figure 7, right). One update per 5 s (7.9 % of messages) gives
-   0.445 m and one per second (26 %) 0.428 m, both *better* than fusing every
-   message (0.485 m): consecutive observations of the same teammate are
-   strongly correlated and each CI update has to inflate the receiver's own
-   prior, so beyond roughly one update per second extra messages add noise
-   rather than information. Below one update per 30 s (1.1 messages per robot
-   per minute) the error rises to 0.735 m, and with no messages to 2.72 m.
+3. **The knee is at about 2.5 messages per robot per minute, on a fixed schedule.**
+   Limiting each robot to one teammate update per 10 s delivers 4.6 % of the
+   available messages and yields 0.492 m team RMSE, 99.7 % of the gain of
+   unconstrained messaging (Figure 8, right); this remains the knee of the
+   pooled curve after the trigger family is added. One update per 5 s (7.9 % of
+   messages) gives 0.445 m and one per second (26 %) 0.428 m, both *better*
+   than fusing every message (0.485 m): consecutive observations of the same
+   teammate are strongly correlated and each CI update has to inflate the
+   receiver's own prior, so beyond roughly one update per second extra messages
+   add noise rather than information. Below one update per 30 s (1.1 messages
+   per robot per minute) the error rises to 0.735 m, and with no messages to
+   2.72 m.
 
-4. **How the budget is spent matters as much as its size.** At matched
-   budgets, regularly spaced updates beat random delivery: about 13.5
-   messages per robot per minute give 0.428 m with a rate limit but 0.521 m
-   with random loss (p = 0.75); about 5 per minute give 0.445 m (one per 5 s)
-   against 0.696 m (p = 0.9). A communication radius is the worst way to spend
-   the budget: a 2 m radius still delivers 17.6 messages per robot per minute
-   (33 %) yet produces 1.00 m, and a 4 m radius (84 % of messages) still costs
-   0.558 m against 0.485 m, because range gating removes exactly the
-   observations of distant anchored teammates that map-blind robots depend on
-   (median robot-to-robot range is 2.1-3.5 m).
+4. **How the budget is spent matters as much as its size, and the simplest
+   trigger does not beat a fixed schedule.** At matched budgets, regularly
+   spaced updates beat random delivery: about 13.5 messages per robot per
+   minute give 0.428 m with a rate limit but 0.521 m with random loss
+   (p = 0.75); about 5 per minute give 0.445 m (one per 5 s) against 0.696 m
+   (p = 0.9). A communication radius is the worst way to spend the budget: a
+   2 m radius still delivers 17.6 messages per robot per minute (33 %) yet
+   produces 1.00 m, and a 4 m radius (84 % of messages) still costs 0.558 m
+   against 0.485 m, because range gating removes exactly the observations of
+   distant anchored teammates that map-blind robots depend on (median
+   robot-to-robot range is 2.1-3.5 m). The covariance-threshold trigger matches
+   unconstrained messaging while it still delivers 34 messages per robot per
+   minute or more (tau <= 0.03: 0.485-0.49 m) but is worse than the fixed
+   schedule at every matched budget below that (Table 11): at 2.411 messages
+   per robot per minute (tau = 3) it gives 1.084 m against 0.492 m for the
+   10 s schedule at 2.455; at 4.903 (tau = 1) 0.765 m against 0.445 m for the
+   5 s schedule at 4.17; at 10.178 (tau = 0.3) 0.505 m against 0.428 m for the
+   1 s schedule at 13.48. Its own knee (tau = 0.3, 10.178 messages, 99.1 % of
+   the gain) sits at four times the budget of the fixed-schedule knee. A
+   plausible reason, not tested here, is that the trigger spends its messages
+   in bursts after the receiver has already drifted, and that the robots that
+   exceed the threshold most are those far from the anchored teammates.
 
 5. **Consistent fusion is a prerequisite for the result.** The naive
    cooperative EKF, which only adds the teammate covariance to the sensor
@@ -509,7 +752,8 @@ the end points in normalised coordinates).*
 In short: cooperative localization needs very little communication, but what
 it needs is a steady trickle of updates from well-localized teammates. On this
 data one message per robot every 10 s is enough; what is harmful is cutting
-off long-range exchanges, not cutting the message rate.
+off long-range exchanges or waiting until the receiver is already lost, not
+cutting the message rate.
 
 ## 7. Limitations
 
@@ -519,15 +763,21 @@ off long-range exchanges, not cutting the message rate.
   or properly correlated filter would be the natural upper bound.
 * **Message model.** A message is counted per robot-to-robot observation and
   is assumed to arrive instantly and losslessly once the constraint admits it;
-  bandwidth, latency and packet size are not modelled. Only the observer's
-  estimate is updated; the observed robot learns nothing from being seen.
-* **Fixed tuning.** Noise parameters were set once, a priori, and are
-  conservative relative to the measured residuals. The +4 to +5 cm range bias
-  of robot observations and the range-dependent noise are not modelled; both
-  affect every method equally.
+  bandwidth, latency and packet size are not modelled, and the random-loss
+  model is independent per message. Only the observer's estimate is updated;
+  the observed robot learns nothing from being seen.
+* **Fixed tuning, including the gate.** Noise parameters were set once, a
+  priori, and are conservative relative to the measured residuals. The
+  +4 to +5 cm range bias of robot observations and the range-dependent noise
+  are not modelled; both affect every method equally. The fixed 99 % innovation
+  gate protects dataset 1 from its landmark mis-detections but makes the filter
+  fail on the first 500 s of dataset 9 (Section 5.6).
+* **Simplest trigger only.** The event-triggered family is represented by a
+  single covariance-threshold rule; innovation-based, adaptive or
+  implicit-information triggers from the literature were not run.
 * **Scope of the data.** Four datasets from one room, one sensor type and
-  one robot platform; robots move slowly (at most 0.09 m/s). Datasets 5-9 and
-  the occluded dataset 9 were not run.
+  one robot platform; robots move slowly (at most 0.09 m/s in datasets 1-4).
+  Datasets 5-8 and the full dataset 9 were not run.
 * **Map-blind split.** The choice of robots 1-2 as anchors is fixed and
   arbitrary; the per-robot tables show that results for map-blind robots
   depend strongly on how often they see an anchored teammate.
@@ -542,6 +792,14 @@ python run_experiments.py
 python -m unittest discover -s tests
 ```
 
+Dataset 9 window and its diagnosis:
+
+```
+python scripts/download_mrclam.py 9
+python run_experiments.py --datasets 9 --max-duration 500 --results results/dataset9_500s --figures figures/dataset9_500s
+python scripts/dataset9_gate_check.py
+```
+
 `python run_experiments.py --replot` regenerates every figure and table from
 the saved CSVs without rerunning the filters.
 
@@ -550,10 +808,22 @@ the saved CSVs without rerunning the filters.
 * K. Y. K. Leung, Y. Halpern, T. D. Barfoot and H. H. T. Liu, "The UTIAS
   Multi-Robot Cooperative Localization and Mapping Dataset," International
   Journal of Robotics Research, 30(8):969-974, 2011.
+* S. J. Julier and J. K. Uhlmann, "A non-divergent estimation algorithm in the
+  presence of unknown correlations," Proceedings of the American Control
+  Conference, pp. 2369-2373, 1997.
 * S. J. Julier and J. K. Uhlmann, "General decentralized data fusion with
-  covariance intersection (CI)," in Handbook of Multisensor Data Fusion
-  (D. L. Hall and J. Llinas, eds.), chapter 12, CRC Press, 2001.
+  covariance intersection (CI)," in Multisensor Data Fusion, CRC Press, 2001.
 * L. C. Carrillo-Arce, E. D. Nerurkar, J. L. Gordillo and S. I. Roumeliotis,
   "Decentralized multi-robot cooperative localization using covariance
   intersection," IEEE/RSJ International Conference on Intelligent Robots and
-  Systems (IROS), 2013.
+  Systems (IROS), pp. 1412-1417, 2013.
+* T.-K. Chang, K. Chen and A. Mehta, "Resilient and consistent multirobot
+  cooperative localization with covariance intersection," IEEE Transactions
+  on Robotics, 38(1):197-208, 2022.
+* L. Luft, T. Schubert, S. I. Roumeliotis and W. Burgard, "Recursive
+  decentralized localization for multi-robot systems with asynchronous
+  pairwise communication," International Journal of Robotics Research,
+  37(10):1152-1167, 2018.
+* M. Ouimet, D. Iglesias, N. Ahmed and S. Martinez, "Cooperative robot
+  localization using event-triggered estimation," Journal of Aerospace
+  Information Systems, 15(7):427-449, 2018.

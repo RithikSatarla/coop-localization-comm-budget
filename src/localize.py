@@ -287,7 +287,11 @@ def ekf_cooperative(ds: Dataset, policy, params: NoiseParams | None = None,
             for j, rr, bb in obs:
                 log.candidates += 1
                 log.per_robot_candidates[r] += 1
-                if not policy.allow(receiver=r, sender=j, t=t, measured_range=rr, rng=rng):
+                # Trace of the receiver's current position covariance, evaluated just
+                # before this candidate fusion (it shrinks after every accepted fusion).
+                pos_var = float(f.P[0, 0] + f.P[1, 1])
+                if not policy.allow(receiver=r, sender=j, t=t, measured_range=rr, rng=rng,
+                                    receiver_pos_var=pos_var):
                     continue
                 log.sent += 1
                 log.per_robot_sent[r] += 1

@@ -165,10 +165,16 @@ def _gt_dropout_windows(gt_t, gap_max):
 
 
 def resample(raw: RawDataset, dt: float = 0.02, gt_gap_max: float = 0.5,
-             odom_hold_max: float = 1.5) -> Dataset:
-    """Resample a raw dataset onto a uniform time grid (see module docstring)."""
+             odom_hold_max: float = 1.5, max_duration: float | None = None) -> Dataset:
+    """Resample a raw dataset onto a uniform time grid (see module docstring).
+
+    ``max_duration`` truncates the grid to the first ``max_duration`` seconds
+    after the common start (used for the 500 s window of dataset 9).
+    """
     t_start = max(rr.groundtruth["time"].iloc[0] for rr in raw.robots.values())
     t_end = min(rr.groundtruth["time"].iloc[-1] for rr in raw.robots.values())
+    if max_duration is not None:
+        t_end = min(t_end, t_start + float(max_duration))
     n = int(np.floor((t_end - t_start) / dt)) + 1
     t_abs = t_start + dt * np.arange(n)
     t_rel = dt * np.arange(n)

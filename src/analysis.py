@@ -90,6 +90,36 @@ def summarize_over_datasets(summary: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def matched_budget(sweep_mean: pd.DataFrame, target_family: str = "trigger",
+                   families=("rate", "drop", "radius")) -> pd.DataFrame:
+    """Pair every setting of ``target_family`` with the nearest-budget setting of each
+    other family (nearest in log delivered messages per robot per minute, zero-message
+    settings excluded) so that policies can be compared at matched message rate."""
+    rows = []
+    for regime, g in sweep_mean.groupby("regime", sort=False):
+        tg = g[(g["family"] == target_family) & (g["messages_per_robot_min"] > 0)]
+        for _, tr in tg.iterrows():
+            for fam in families:
+                cand = g[(g["family"] == fam) & (g["messages_per_robot_min"] > 0)]
+                if cand.empty:
+                    continue
+                d = np.abs(np.log(cand["messages_per_robot_min"].to_numpy()
+                                  / tr["messages_per_robot_min"]))
+                best = cand.iloc[int(np.argmin(d))]
+                rows.append(dict(
+                    regime=regime,
+                    trigger_setting=tr["setting"],
+                    trigger_messages_per_robot_min=tr["messages_per_robot_min"],
+                    trigger_rmse_xy=tr["rmse_xy"],
+                    family=fam, setting=best["setting"],
+                    messages_per_robot_min=best["messages_per_robot_min"],
+                    rmse_xy=best["rmse_xy"],
+                    budget_ratio=tr["messages_per_robot_min"] / best["messages_per_robot_min"],
+                    rmse_difference=tr["rmse_xy"] - best["rmse_xy"],
+                ))
+    return pd.DataFrame(rows)
+
+
 def _fmt(v, digits=3):
     if isinstance(v, float):
         if math.isnan(v):

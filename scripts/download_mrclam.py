@@ -33,7 +33,7 @@ from pathlib import Path
 
 FTP_BASE = "ftp://asrl3.utias.utoronto.ca/MRCLAM/"
 # Compressed sizes listed by the FTP server (bytes); used as an integrity check.
-EXPECTED_SIZES = {1: 6118042, 2: 7670940, 3: 8091370, 4: 6300417}
+EXPECTED_SIZES = {1: 6118042, 2: 7670940, 3: 8091370, 4: 6300417, 9: 11328005}
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 

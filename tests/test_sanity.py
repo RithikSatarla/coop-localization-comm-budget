@@ -14,7 +14,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.comm import DropPolicy, FullComm, NoComm, RadiusPolicy, RatePolicy  # noqa: E402
+from src.comm import (DropPolicy, EventTriggeredPolicy, FullComm, NoComm,  # noqa: E402
+                      RadiusPolicy, RatePolicy)
 from src.loader import Dataset, RobotData, wrap_angle  # noqa: E402
 from src.localize import (EKF, NoiseParams, dead_reckoning, ekf_cooperative,  # noqa: E402
                           ekf_landmarks, score)
@@ -217,6 +218,33 @@ class TestCommPolicies(unittest.TestCase):
         self.assertFalse(RatePolicy(math.inf).allow(1, 2, 0.0, 1.0, rng))
         pol.reset()
         self.assertTrue(pol.allow(1, 2, 100.0, 1.0, rng))
+
+    def test_trigger_rule(self):
+        pol = EventTriggeredPolicy(0.01)
+        rng = np.random.default_rng(0)
+        self.assertTrue(pol.allow(1, 2, 0.0, 1.0, rng, receiver_pos_var=0.02))
+        self.assertFalse(pol.allow(1, 2, 0.0, 1.0, rng, receiver_pos_var=0.005))
+        self.assertFalse(pol.allow(1, 2, 0.0, 1.0, rng, receiver_pos_var=0.01))
+
+    def test_trigger_identities_and_monotonicity(self):
+        ds = make_synthetic()
+        full, lf = ekf_cooperative(ds, FullComm())
+        none, ln = ekf_cooperative(ds, NoComm())
+        t0, l0 = ekf_cooperative(ds, EventTriggeredPolicy(0.0))
+        tinf, linf = ekf_cooperative(ds, EventTriggeredPolicy(math.inf))
+        self.assertEqual(l0.sent, lf.candidates)
+        self.assertEqual(linf.sent, 0)
+        for r in ds.robots:
+            np.testing.assert_array_equal(t0[r], full[r])
+            np.testing.assert_array_equal(tinf[r], none[r])
+        sent = [ekf_cooperative(ds, EventTriggeredPolicy(tau))[1].sent
+                for tau in (1e-4, 1e-3, 1e-2)]
+        self.assertTrue(sent[0] >= sent[1] >= sent[2])
+        a, la = ekf_cooperative(ds, EventTriggeredPolicy(1e-3), seed=1)
+        b, lb = ekf_cooperative(ds, EventTriggeredPolicy(1e-3), seed=2)
+        self.assertEqual(la.sent, lb.sent)            # deterministic: seed irrelevant
+        for r in ds.robots:
+            np.testing.assert_array_equal(a[r], b[r])
 
 
 class TestAnalysis(unittest.TestCase):

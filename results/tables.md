@@ -209,9 +209,109 @@ Per dataset (team position RMSE [m]):
 | map_blind | 30 s | 0.978 | 0.655 | 0.982 | 0.324 |
 | map_blind | inf | 2.97 | 2.992 | 2.956 | 1.97 |
 
-## Accuracy vs messages: knee points
+## Sweep: Covariance-threshold trigger (tau, m^2) (mean over datasets)
 
-| knee_found | regime | rmse_xy_full_comm | rmse_xy_no_comm | messages_per_robot_min_full_comm | family | setting | messages_per_robot_min | rmse_xy | message_fraction | fraction_of_gain |
-|---|---|---|---|---|---|---|---|---|---|---|
-| False | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
-| True | map_blind | 0.485 | 2.722 | 53.234 | rate | 10 s | 2.455 | 0.492 | 0.046 | 0.997 |
+| regime | setting | messages_per_robot_min | message_fraction | rmse_xy | rmse_xy_std_datasets | rmse_xy_blind | rmse_theta |
+|---|---|---|---|---|---|---|---|
+| full_map | tau=0.003 | 43.756 | 0.822 | 0.152 | 0.042 |  | 0.086 |
+| full_map | tau=0.01 | 8.529 | 0.158 | 0.151 | 0.04 |  | 0.086 |
+| full_map | tau=0.03 | 1.46 | 0.027 | 0.152 | 0.041 |  | 0.087 |
+| full_map | tau=0.1 | 0.335 | 0.006 | 0.151 | 0.041 |  | 0.087 |
+| full_map | tau=0.3 | 0.024 | 0.000427 | 0.152 | 0.041 |  | 0.087 |
+| full_map | tau=1 | 0.004 | 6.72e-05 | 0.153 | 0.043 |  | 0.088 |
+| full_map | tau=3 | 0.004 | 6.72e-05 | 0.152 | 0.042 |  | 0.088 |
+| full_map | tau=10 | 0 | 0 | 0.153 | 0.042 |  | 0.088 |
+| map_blind | tau=0.003 | 50.161 | 0.943 | 0.485 | 0.312 | 0.719 | 0.238 |
+| map_blind | tau=0.01 | 36.724 | 0.689 | 0.485 | 0.311 | 0.719 | 0.239 |
+| map_blind | tau=0.03 | 33.609 | 0.631 | 0.49 | 0.32 | 0.727 | 0.24 |
+| map_blind | tau=0.1 | 24.736 | 0.464 | 0.553 | 0.405 | 0.831 | 0.261 |
+| map_blind | tau=0.3 | 10.178 | 0.194 | 0.505 | 0.293 | 0.752 | 0.258 |
+| map_blind | tau=1 | 4.903 | 0.094 | 0.765 | 0.443 | 1.184 | 0.346 |
+| map_blind | tau=3 | 2.411 | 0.046 | 1.084 | 0.418 | 1.717 | 0.49 |
+| map_blind | tau=10 | 1.992 | 0.038 | 1.309 | 0.368 | 2.091 | 0.57 |
+
+Per dataset (team position RMSE [m]):
+
+| regime | setting | dataset 1 | dataset 2 | dataset 3 | dataset 4 |
+|---|---|---|---|---|---|
+| full_map | tau=0.003 | 0.19 | 0.186 | 0.123 | 0.111 |
+| full_map | tau=0.01 | 0.183 | 0.188 | 0.122 | 0.111 |
+| full_map | tau=0.03 | 0.184 | 0.19 | 0.121 | 0.111 |
+| full_map | tau=0.1 | 0.181 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=0.3 | 0.182 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=1 | 0.186 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=3 | 0.184 | 0.193 | 0.121 | 0.111 |
+| full_map | tau=10 | 0.185 | 0.193 | 0.121 | 0.111 |
+| map_blind | tau=0.003 | 0.352 | 0.361 | 0.95 | 0.277 |
+| map_blind | tau=0.01 | 0.357 | 0.359 | 0.948 | 0.277 |
+| map_blind | tau=0.03 | 0.357 | 0.361 | 0.968 | 0.276 |
+| map_blind | tau=0.1 | 0.359 | 0.378 | 1.159 | 0.316 |
+| map_blind | tau=0.3 | 0.366 | 0.401 | 0.941 | 0.313 |
+| map_blind | tau=1 | 0.709 | 0.511 | 1.406 | 0.433 |
+| map_blind | tau=3 | 1.508 | 0.715 | 1.379 | 0.735 |
+| map_blind | tau=10 | 1.146 | 0.894 | 1.743 | 1.453 |
+
+## Accuracy vs messages: knee points (pooled over families and per family)
+
+| knee_found | scope | regime | rmse_xy_full_comm | rmse_xy_no_comm | messages_per_robot_min_full_comm | family | setting | messages_per_robot_min | rmse_xy | message_fraction | fraction_of_gain |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| False | pooled | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
+| False | drop | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
+| False | radius | full_map | 0.152 | 0.153 | 53.234 |  |  |  |  |  |  |
+| False | rate | full_map | 0.15 | 0.153 | 13.48 |  |  |  |  |  |  |
+| False | trigger | full_map | 0.152 | 0.153 | 43.756 |  |  |  |  |  |  |
+| True | pooled | map_blind | 0.485 | 2.722 | 53.234 | rate | 10 s | 2.455 | 0.492 | 0.046 | 0.997 |
+| True | drop | map_blind | 0.485 | 2.722 | 53.234 | drop | p=0.9 | 5.395 | 0.696 | 0.101 | 0.906 |
+| True | radius | map_blind | 0.485 | 2.722 | 53.234 | radius | 2 m | 17.556 | 1.003 | 0.329 | 0.768 |
+| True | rate | map_blind | 0.428 | 2.722 | 13.48 | rate | 10 s | 2.455 | 0.492 | 0.046 | 0.972 |
+| True | trigger | map_blind | 0.485 | 2.722 | 50.161 | trigger | tau=0.3 | 10.178 | 0.505 | 0.194 | 0.991 |
+
+## Matched-budget comparison: covariance-threshold trigger vs the nearest delivered-message rate of each other family
+
+| regime | trigger_setting | trigger_messages_per_robot_min | trigger_rmse_xy | family | setting | messages_per_robot_min | rmse_xy | budget_ratio | rmse_difference |
+|---|---|---|---|---|---|---|---|---|---|
+| full_map | tau=0.003 | 43.756 | 0.152 | rate | 1 s | 13.48 | 0.15 | 3.246 | 0.003 |
+| full_map | tau=0.003 | 43.756 | 0.152 | drop | p=0.25 | 39.775 | 0.151 | 1.1 | 0.002 |
+| full_map | tau=0.003 | 43.756 | 0.152 | radius | 4 m | 44.875 | 0.151 | 0.975 | 0.002 |
+| full_map | tau=0.01 | 8.529 | 0.151 | rate | 1 s | 13.48 | 0.15 | 0.633 | 0.000914 |
+| full_map | tau=0.01 | 8.529 | 0.151 | drop | p=0.75 | 13.447 | 0.15 | 0.634 | 0.000352 |
+| full_map | tau=0.01 | 8.529 | 0.151 | radius | 2 m | 17.556 | 0.149 | 0.486 | 0.002 |
+| full_map | tau=0.03 | 1.46 | 0.152 | rate | 30 s | 1.096 | 0.152 | 1.332 | -0.000167 |
+| full_map | tau=0.03 | 1.46 | 0.152 | drop | p=0.9 | 5.395 | 0.151 | 0.271 | 0.000877 |
+| full_map | tau=0.03 | 1.46 | 0.152 | radius | 1 m | 0.493 | 0.153 | 2.964 | -0.000959 |
+| full_map | tau=0.1 | 0.335 | 0.151 | rate | 30 s | 1.096 | 0.152 | 0.306 | -0.000264 |
+| full_map | tau=0.1 | 0.335 | 0.151 | drop | p=0.9 | 5.395 | 0.151 | 0.062 | 0.000781 |
+| full_map | tau=0.1 | 0.335 | 0.151 | radius | 1 m | 0.493 | 0.153 | 0.681 | -0.001 |
+| full_map | tau=0.3 | 0.024 | 0.152 | rate | 30 s | 1.096 | 0.152 | 0.021 | 2.96e-05 |
+| full_map | tau=0.3 | 0.024 | 0.152 | drop | p=0.9 | 5.395 | 0.151 | 0.004 | 0.001 |
+| full_map | tau=0.3 | 0.024 | 0.152 | radius | 1 m | 0.493 | 0.153 | 0.048 | -0.000763 |
+| full_map | tau=1 | 0.004 | 0.153 | rate | 30 s | 1.096 | 0.152 | 0.003 | 0.001 |
+| full_map | tau=1 | 0.004 | 0.153 | drop | p=0.9 | 5.395 | 0.151 | 0.000669 | 0.002 |
+| full_map | tau=1 | 0.004 | 0.153 | radius | 1 m | 0.493 | 0.153 | 0.007 | 0.000465 |
+| full_map | tau=3 | 0.004 | 0.152 | rate | 30 s | 1.096 | 0.152 | 0.003 | 0.000681 |
+| full_map | tau=3 | 0.004 | 0.152 | drop | p=0.9 | 5.395 | 0.151 | 0.000669 | 0.002 |
+| full_map | tau=3 | 0.004 | 0.152 | radius | 1 m | 0.493 | 0.153 | 0.007 | -0.000112 |
+| map_blind | tau=0.003 | 50.161 | 0.485 | rate | 1 s | 13.48 | 0.428 | 3.721 | 0.057 |
+| map_blind | tau=0.003 | 50.161 | 0.485 | drop | p=0 | 53.234 | 0.485 | 0.942 | 4.84e-06 |
+| map_blind | tau=0.003 | 50.161 | 0.485 | radius | 8 m | 53.216 | 0.485 | 0.943 | 3.25e-06 |
+| map_blind | tau=0.01 | 36.724 | 0.485 | rate | 1 s | 13.48 | 0.428 | 2.724 | 0.058 |
+| map_blind | tau=0.01 | 36.724 | 0.485 | drop | p=0.25 | 39.775 | 0.488 | 0.923 | -0.003 |
+| map_blind | tau=0.01 | 36.724 | 0.485 | radius | 4 m | 44.875 | 0.558 | 0.818 | -0.073 |
+| map_blind | tau=0.03 | 33.609 | 0.49 | rate | 1 s | 13.48 | 0.428 | 2.493 | 0.063 |
+| map_blind | tau=0.03 | 33.609 | 0.49 | drop | p=0.25 | 39.775 | 0.488 | 0.845 | 0.002 |
+| map_blind | tau=0.03 | 33.609 | 0.49 | radius | 4 m | 44.875 | 0.558 | 0.749 | -0.067 |
+| map_blind | tau=0.1 | 24.736 | 0.553 | rate | 1 s | 13.48 | 0.428 | 1.835 | 0.125 |
+| map_blind | tau=0.1 | 24.736 | 0.553 | drop | p=0.5 | 26.572 | 0.533 | 0.931 | 0.02 |
+| map_blind | tau=0.1 | 24.736 | 0.553 | radius | 2 m | 17.556 | 1.003 | 1.409 | -0.45 |
+| map_blind | tau=0.3 | 10.178 | 0.505 | rate | 1 s | 13.48 | 0.428 | 0.755 | 0.078 |
+| map_blind | tau=0.3 | 10.178 | 0.505 | drop | p=0.75 | 13.447 | 0.521 | 0.757 | -0.016 |
+| map_blind | tau=0.3 | 10.178 | 0.505 | radius | 2 m | 17.556 | 1.003 | 0.58 | -0.498 |
+| map_blind | tau=1 | 4.903 | 0.765 | rate | 5 s | 4.17 | 0.445 | 1.176 | 0.32 |
+| map_blind | tau=1 | 4.903 | 0.765 | drop | p=0.9 | 5.395 | 0.696 | 0.909 | 0.069 |
+| map_blind | tau=1 | 4.903 | 0.765 | radius | 2 m | 17.556 | 1.003 | 0.279 | -0.239 |
+| map_blind | tau=3 | 2.411 | 1.084 | rate | 10 s | 2.455 | 0.492 | 0.982 | 0.592 |
+| map_blind | tau=3 | 2.411 | 1.084 | drop | p=0.9 | 5.395 | 0.696 | 0.447 | 0.389 |
+| map_blind | tau=3 | 2.411 | 1.084 | radius | 1 m | 0.493 | 2.864 | 4.893 | -1.779 |
+| map_blind | tau=10 | 1.992 | 1.309 | rate | 10 s | 2.455 | 0.492 | 0.811 | 0.817 |
+| map_blind | tau=10 | 1.992 | 1.309 | drop | p=0.9 | 5.395 | 0.696 | 0.369 | 0.613 |
+| map_blind | tau=10 | 1.992 | 1.309 | radius | 1 m | 0.493 | 2.864 | 4.043 | -1.555 |

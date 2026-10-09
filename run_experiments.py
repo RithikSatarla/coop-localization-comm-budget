@@ -13,9 +13,9 @@ For each dataset (1-4 by default) and each regime:
    unconstrained communication. A fusion ablation (naive inflation instead of
    covariance intersection) is run alongside.
 2. Communication sweeps on the cooperative EKF: message drop probability,
-   comm radius on measured range, and maximum teammate-update rate. Drop
-   probabilities are repeated over several seeds; radius and rate are
-   deterministic and run once.
+   comm radius on measured range, maximum teammate-update rate, and a simple
+   covariance-threshold trigger. Drop probabilities are repeated over several
+   seeds; the other three families are deterministic and run once.
 3. Message accounting: candidates (robot-to-robot observations), messages
    delivered, fused, gated and declined are logged for every run.
 
@@ -25,6 +25,8 @@ Usage
     python run_experiments.py --datasets 1 2       # subset
     python run_experiments.py --quick              # dataset 1, 1 seed (smoke test)
     python run_experiments.py --replot             # regenerate figures/tables from results/
+    python run_experiments.py --datasets 9 --max-duration 500 \
+        --results results/dataset9_500s --figures figures/dataset9_500s
 """
 from __future__ import annotations
 
@@ -45,16 +47,24 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from src import plotting  # noqa: E402
-from src.analysis import (knee_point, summarize_over_datasets, summarize_sweep,  # noqa: E402
-                          to_markdown)
-from src.comm import (COMM_RADII, DROP_PROBS, RATE_INTERVALS, DropPolicy, FullComm,  # noqa: E402
-                      NoComm, RadiusPolicy, RatePolicy, setting_label)
+from src.analysis import (knee_point, matched_budget, summarize_over_datasets,  # noqa: E402
+                          summarize_sweep, to_markdown)
+from src.comm import (COMM_RADII, DROP_PROBS, RATE_INTERVALS, TRIGGER_TAUS, DropPolicy,  # noqa: E402
+                      EventTriggeredPolicy, FullComm, NoComm, RadiusPolicy, RatePolicy,
+                      setting_label)
 from src.loader import load_dataset, summarize  # noqa: E402
 from src.localize import (NoiseParams, dead_reckoning, ekf_cooperative, ekf_landmarks,  # noqa: E402
                           score)
 
 REGIMES = {"full_map": None, "map_blind": (1, 2)}   # regime -> robots that may use landmarks
 METHODS = ("Dead reckoning", "EKF landmarks", "EKF cooperative")
+FAMILIES = ("drop", "radius", "rate", "trigger")
+FAMILY_TITLES = {"drop": "Message drop probability", "radius": "Comm radius",
+                 "rate": "Max update rate (minimum interval between teammate updates)",
+                 "trigger": "Covariance-threshold trigger (tau, m^2)"}
+FAMILY_XLABELS = {"drop": "message drop probability p", "radius": "comm radius (measured range)",
+                  "rate": "minimum interval between teammate updates",
+                  "trigger": "trigger threshold tau on position-covariance trace [m$^2$]"}
 PLOT_DATASET = 1
 PLOT_ROBOTS = {"full_map": 1, "map_blind": 3}
 TRAJ_STRIDE = 10            # trajectories are stored every 10th grid step (0.2 s) for plotting
@@ -67,7 +77,14 @@ def _policy(family: str, value: float):
         return RadiusPolicy(value)
     if family == "rate":
         return RatePolicy(value)
+    if family == "trigger":
+        return EventTriggeredPolicy(value)
     raise ValueError(family)
+
+
+def _family_settings(family: str):
+    return {"drop": DROP_PROBS, "radius": COMM_RADII, "rate": RATE_INTERVALS,
+            "trigger": TRIGGER_TAUS}[family]
 
 
 def _rows(ds, regime, method, trajs, log, extra=None):
@@ -93,10 +110,10 @@ def _rows(ds, regime, method, trajs, log, extra=None):
     return out
 
 
-def run_dataset(k: int, dt: float, seeds: list[int]) -> dict:
+def run_dataset(k: int, dt: float, seeds: list[int], max_duration: float | None = None) -> dict:
     """All runs for one dataset. Executed in a worker process."""
     t_start = time.time()
-    ds = load_dataset(k, dt=dt)
+    ds = load_dataset(k, dt=dt, max_duration=max_duration)
     params = NoiseParams()
     base, sweep, ablation = [], [], []
     traj_store = {}
@@ -143,10 +160,9 @@ def run_dataset(k: int, dt: float, seeds: list[int]) -> dict:
                 landmarks=np.array([ds.landmarks[i] for i in sorted(ds.landmarks)]),
             )
 
-        families = [("drop", DROP_PROBS, seeds), ("radius", COMM_RADII, [0]),
-                    ("rate", RATE_INTERVALS, [0])]
-        for family, settings, fam_seeds in families:
-            for value in settings:
+        for family in FAMILIES:
+            fam_seeds = seeds if family == "drop" else [0]
+            for value in _family_settings(family):
                 pol = _policy(family, value)
                 label = setting_label(pol)
                 for seed in fam_seeds:
@@ -183,7 +199,7 @@ def save_raw(results: list[dict], resdir: Path):
     base.to_csv(resdir / "base_methods.csv", index=False)
     ablation.to_csv(resdir / "fusion_ablation.csv", index=False)
     dsum.to_csv(resdir / "dataset_summary.csv", index=False)
-    for fam in ("drop", "radius", "rate"):
+    for fam in FAMILIES:
         sweep[sweep.family == fam].to_csv(resdir / f"sweep_{fam}.csv", index=False)
     traj = {}
     for res in results:
@@ -205,8 +221,9 @@ def load_raw(resdir: Path):
     base = pd.read_csv(resdir / "base_methods.csv")
     ablation = pd.read_csv(resdir / "fusion_ablation.csv")
     dsum = pd.read_csv(resdir / "dataset_summary.csv")
-    sweep = pd.concat([pd.read_csv(resdir / f"sweep_{fam}.csv") for fam in ("drop", "radius", "rate")],
-                      ignore_index=True)
+    parts = [pd.read_csv(resdir / f"sweep_{fam}.csv") for fam in FAMILIES
+             if (resdir / f"sweep_{fam}.csv").exists()]
+    sweep = pd.concat(parts, ignore_index=True)
     return base, sweep, ablation, dsum
 
 
@@ -232,9 +249,34 @@ def load_trajectories(resdir: Path) -> dict:
 # Derived outputs: summaries, knees, figures, tables
 # ----------------------------------------------------------------------------
 
+def _knee_rows(pts: pd.DataFrame, regime: str, scope: str):
+    """Knee of the accuracy-vs-messages points ``pts`` (one scope = pooled or one family)."""
+    res = knee_point(pts["messages_per_robot_min"].to_numpy(), pts["rmse_xy"].to_numpy())
+    full_pts = pts[pts["messages_per_robot_min"] == pts["messages_per_robot_min"].max()]
+    none_pts = pts[pts["messages_per_robot_min"] == 0]
+    common = dict(
+        scope=scope, regime=regime,
+        rmse_xy_full_comm=float(full_pts["rmse_xy"].iloc[0]) if len(full_pts) else float("nan"),
+        rmse_xy_no_comm=float(none_pts["rmse_xy"].iloc[0]) if len(none_pts) else float("nan"),
+        messages_per_robot_min_full_comm=float(full_pts["messages_per_robot_min"].iloc[0])
+        if len(full_pts) else float("nan"),
+    )
+    if res is None:
+        return None, dict(knee_found=False, **common)
+    i, kx, ky = res
+    row = pts.iloc[i]
+    gain_total = common["rmse_xy_no_comm"] - common["rmse_xy_full_comm"]
+    return (kx, ky), dict(
+        knee_found=True, family=row["family"], setting=row["setting"],
+        messages_per_robot_min=kx, rmse_xy=ky, message_fraction=float(row["message_fraction"]),
+        fraction_of_gain=(common["rmse_xy_no_comm"] - ky) / gain_total if gain_total > 0 else float("nan"),
+        **common)
+
+
 def write_outputs(base, sweep, ablation, dsum, traj_store, resdir: Path, figdir: Path):
     resdir.mkdir(parents=True, exist_ok=True)
     figdir.mkdir(parents=True, exist_ok=True)
+    families_present = [f for f in FAMILIES if (sweep["family"] == f).any()]
 
     # --- base summary: mean over robots per dataset/regime/method --------------
     base_summary = (base.groupby(["regime", "dataset", "method"], sort=False)
@@ -254,41 +296,32 @@ def write_outputs(base, sweep, ablation, dsum, traj_store, resdir: Path, figdir:
     sweep_mean = summarize_over_datasets(sweep_summary)
     sweep_mean.to_csv(resdir / "sweeps_summary.csv", index=False)
 
-    # --- accuracy vs messages, knee per regime --------------------------------
+    # --- accuracy vs messages: pooled knee per regime, plus per-family knees -----
     knees = {}
     knee_rows = []
     for regime in REGIMES:
         pts = sweep_mean[sweep_mean.regime == regime].reset_index(drop=True)
         if pts.empty:
             continue
-        res = knee_point(pts["messages_per_robot_min"].to_numpy(), pts["rmse_xy"].to_numpy())
-        full_pts = pts[(pts.family == "drop") & (pts.setting == "p=0")]
-        none_pts = pts[(pts.family == "drop") & (pts.setting == "p=1")]
-        common = dict(
-            regime=regime,
-            rmse_xy_full_comm=float(full_pts["rmse_xy"].iloc[0]),
-            rmse_xy_no_comm=float(none_pts["rmse_xy"].iloc[0]),
-            messages_per_robot_min_full_comm=float(full_pts["messages_per_robot_min"].iloc[0]),
-        )
-        if res is None:
-            knees[regime] = None
-            knee_rows.append(dict(knee_found=False, **common))
-        else:
-            i, kx, ky = res
-            row = pts.iloc[i]
-            knees[regime] = (kx, ky)
-            gain_total = common["rmse_xy_no_comm"] - common["rmse_xy_full_comm"]
-            knee_rows.append(dict(
-                knee_found=True, family=row["family"], setting=row["setting"],
-                messages_per_robot_min=kx, rmse_xy=ky,
-                message_fraction=float(row["message_fraction"]),
-                fraction_of_gain=(common["rmse_xy_no_comm"] - ky) / gain_total if gain_total > 0 else float("nan"),
-                **common))
+        knee, row = _knee_rows(pts, regime, "pooled")
+        knees[regime] = knee
+        knee_rows.append(row)
+        for fam in families_present:
+            fpts = pts[pts.family == fam].reset_index(drop=True)
+            # a family without a zero-message setting borrows the no-comm point
+            if not (fpts["messages_per_robot_min"] == 0).any():
+                none_pt = pts[pts["messages_per_robot_min"] == 0].head(1)
+                fpts = pd.concat([fpts, none_pt], ignore_index=True)
+            _, frow = _knee_rows(fpts, regime, fam)
+            knee_rows.append(frow)
     knee_df = pd.DataFrame(knee_rows)
     knee_df.to_csv(resdir / "knee_points.csv", index=False)
     acc = sweep_mean[["regime", "family", "setting", "value", "messages_per_robot_min",
                       "message_fraction", "rmse_xy", "rmse_xy_blind", "rmse_xy_std_datasets"]]
     acc.to_csv(resdir / "accuracy_vs_messages.csv", index=False)
+    matched = matched_budget(sweep_mean) if "trigger" in families_present else pd.DataFrame()
+    if not matched.empty:
+        matched.to_csv(resdir / "matched_budget.csv", index=False)
 
     # --- figures ---------------------------------------------------------------
     figs = {}
@@ -303,12 +336,10 @@ def write_outputs(base, sweep, ablation, dsum, traj_store, resdir: Path, figdir:
             f"trajectory_d{PLOT_DATASET}_r{r}_{regime}", figdir)
     figs["rmse_base_methods"] = plotting.plot_base_bars(base, "rmse_base_methods", figdir)
     baseline = base_summary[base_summary.method == "EKF landmarks"]
-    xlabels = {"drop": "message drop probability p", "radius": "comm radius (measured range)",
-               "rate": "minimum interval between teammate updates"}
-    for fam in ("drop", "radius", "rate"):
+    for fam in families_present:
         figs[f"rmse_vs_{fam}"] = plotting.plot_sweep(
-            sweep_summary[sweep_summary.family == fam], fam, xlabels[fam], f"rmse_vs_{fam}",
-            figdir, baseline=baseline)
+            sweep_summary[sweep_summary.family == fam], fam, FAMILY_XLABELS[fam],
+            f"rmse_vs_{fam}", figdir, baseline=baseline)
     figs["accuracy_vs_messages"] = plotting.plot_accuracy_vs_messages(
         sweep_mean, knees, "accuracy_vs_messages", figdir)
 
@@ -334,9 +365,8 @@ def write_outputs(base, sweep, ablation, dsum, traj_store, resdir: Path, figdir:
                 declined=("declined_total", "first"))
            .reset_index())
     md.append(to_markdown(abl, digits=3))
-    for fam, title in (("drop", "Message drop probability"), ("radius", "Comm radius"),
-                       ("rate", "Max update rate (minimum interval between teammate updates)")):
-        md.append(f"\n## Sweep: {title} (mean over datasets)\n")
+    for fam in families_present:
+        md.append(f"\n## Sweep: {FAMILY_TITLES[fam]} (mean over datasets)\n")
         sub = sweep_mean[sweep_mean.family == fam][
             ["regime", "setting", "messages_per_robot_min", "message_fraction", "rmse_xy",
              "rmse_xy_std_datasets", "rmse_xy_blind", "rmse_theta"]]
@@ -346,8 +376,12 @@ def write_outputs(base, sweep, ablation, dsum, traj_store, resdir: Path, figdir:
             index=["regime", "setting"], columns="dataset", values="rmse_xy", sort=False)
         pv.columns = [f"dataset {c}" for c in pv.columns]
         md.append(to_markdown(pv.reset_index(), digits=3))
-    md.append("\n## Accuracy vs messages: knee points\n")
+    md.append("\n## Accuracy vs messages: knee points (pooled over families and per family)\n")
     md.append(to_markdown(knee_df, digits=3))
+    if not matched.empty:
+        md.append("\n## Matched-budget comparison: covariance-threshold trigger vs the nearest "
+                  "delivered-message rate of each other family\n")
+        md.append(to_markdown(matched, digits=3))
     (resdir / "tables.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return base_summary, sweep_mean, knee_df, figs, knees
 
@@ -355,9 +389,11 @@ def write_outputs(base, sweep, ablation, dsum, traj_store, resdir: Path, figdir:
 def write_metadata(results, args, wall_s, figs, knees, resdir: Path):
     meta = dict(
         datasets=[res["dataset"] for res in results],
-        dt=args.dt, seeds=list(range(args.seeds)), drop_probs=list(DROP_PROBS),
+        dt=args.dt, max_duration=args.max_duration, seeds=list(range(args.seeds)),
+        drop_probs=list(DROP_PROBS),
         comm_radii=[("inf" if math.isinf(v) else v) for v in COMM_RADII],
         rate_intervals=[("inf" if math.isinf(v) else v) for v in RATE_INTERVALS],
+        trigger_taus=list(TRIGGER_TAUS),
         regimes={k: (list(v) if v else "all") for k, v in REGIMES.items()},
         noise_params={k: (list(v) if isinstance(v, tuple) else v)
                       for k, v in asdict(NoiseParams()).items()},
@@ -381,6 +417,8 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--datasets", type=int, nargs="+", default=[1, 2, 3, 4])
     ap.add_argument("--dt", type=float, default=0.02, help="resampling step [s]")
+    ap.add_argument("--max-duration", type=float, default=None,
+                    help="use only the first N seconds of each dataset")
     ap.add_argument("--seeds", type=int, default=5, help="number of seeds for the drop sweep")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--results", type=Path, default=ROOT / "results")
@@ -403,14 +441,15 @@ def main(argv=None):
         args.datasets, args.seeds = [1], 1
     seeds = list(range(args.seeds))
     t0 = time.time()
-    print(f"datasets {args.datasets}, dt={args.dt}, seeds={seeds}, workers={args.workers}",
-          flush=True)
+    print(f"datasets {args.datasets}, dt={args.dt}, max_duration={args.max_duration}, "
+          f"seeds={seeds}, workers={args.workers}", flush=True)
     workers = max(1, min(args.workers, len(args.datasets)))
     if workers == 1:
-        results = [run_dataset(k, args.dt, seeds) for k in args.datasets]
+        results = [run_dataset(k, args.dt, seeds, args.max_duration) for k in args.datasets]
     else:
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(run_dataset, k, args.dt, seeds) for k in args.datasets]
+            futures = [ex.submit(run_dataset, k, args.dt, seeds, args.max_duration)
+                       for k in args.datasets]
             results = [f.result() for f in futures]
     results.sort(key=lambda r: r["dataset"])
     wall = time.time() - t0

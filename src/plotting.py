@@ -29,6 +29,7 @@ FAMILY_STYLE = {
     "drop": dict(color=C_BLUE, marker="o", label="message drop probability"),
     "radius": dict(color=C_ORANGE, marker="s", label="comm radius"),
     "rate": dict(color=C_AQUA, marker="^", label="max update rate"),
+    "trigger": dict(color=C_VIOLET, marker="D", label="covariance-threshold trigger"),
 }
 REGIME_TITLES = {
     "full_map": "Full map: all robots observe landmarks",
@@ -100,11 +101,16 @@ def _choose_scale(ax, values, log_ratio=5.0):
         ax.set_ylim(0, 1.18 * v.max())
 
 
-def _annotate_grouped(ax, xs, ys, labels, xtol=0.03, ytol=0.015):
-    """Annotate points, merging labels of points that coincide (within tolerances)."""
+def _annotate_grouped(ax, xs, ys, labels, xtol=0.03, ytol=0.015, show=None):
+    """Annotate points, merging labels of points that coincide (within tolerances).
+
+    ``show`` optionally restricts annotation to labels for which ``show(label)``
+    is true; the other points stay unlabeled (they remain in the legend by marker).
+    """
     xs = np.asarray(xs, float)
     ys = np.asarray(ys, float)
-    used = np.zeros(len(xs), bool)
+    keep = np.array([show(l) if show else True for l in labels], bool)
+    used = ~keep
     xspan = max(xs.max() - xs.min(), 1e-9)
     n_drawn = 0
     for i in np.argsort(xs):
@@ -119,6 +125,16 @@ def _annotate_grouped(ax, xs, ys, labels, xtol=0.03, ytol=0.015):
         ax.annotate(text, (xs[i], ys[i]), xytext=offset, textcoords="offset points",
                     fontsize=6.5, color=C_MUTED)
         n_drawn += 1
+
+
+# Labels drawn on the pooled accuracy-vs-messages figure. Every rate and trigger
+# setting is labeled (they are the matched-budget comparison); for the drop and
+# radius families only the settings discussed in the text are labeled to keep
+# the figure legible. All values are in the tables.
+def _label_shown(label: str) -> bool:
+    if label.startswith("tau=") or label.endswith(" s") or label == "inf":
+        return True
+    return label in {"p=1", "p=0.9", "p=0.5", "2 m", "4 m"}
 
 
 def plot_trajectory(t, gt, gt_valid, estimates: dict, landmarks: dict, title: str,
@@ -229,7 +245,9 @@ def plot_sweep(summary: pd.DataFrame, family: str, xlabel: str, stem: str, figdi
             b = baseline[baseline["regime"] == regime]["rmse_xy"].mean()
             ax.axhline(b, color=C_MUTED, ls="--", lw=1.0, label="EKF landmarks only (no messages)")
         ax.set_xticks(x)
-        ax.set_xticklabels(settings)
+        tick_labels = [s.replace("tau=", "") for s in settings] if family == "trigger" else settings
+        ax.set_xticklabels(tick_labels, rotation=(30 if len(settings) > 6 else 0),
+                           ha=("right" if len(settings) > 6 else "center"))
         ax.set_xlabel(xlabel)
         ax.set_ylabel("team position RMSE [m]")
         ax.set_title(REGIME_TITLES[regime])
@@ -264,7 +282,7 @@ def plot_accuracy_vs_messages(points: pd.DataFrame, knees: dict, stem: str, figd
             f = sub[sub["family"] == fam]
             ax.scatter(f["messages_per_robot_min"], f["rmse_xy"], color=st["color"],
                        marker=st["marker"], s=34, zorder=3, label=st["label"], linewidths=0)
-        _annotate_grouped(ax, xs, ys, [str(s) for s in sub["setting"]])
+        _annotate_grouped(ax, xs, ys, [str(s) for s in sub["setting"]], show=_label_shown)
         knee = knees.get(regime)
         shared_handles, shared_labels = ax.get_legend_handles_labels()
         if knee is not None:
