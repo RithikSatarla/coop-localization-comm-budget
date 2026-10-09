@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 
-def knee_point(x, y):
+def knee_point(x, y, min_rel_drop: float = 0.05):
     """Locate the knee of a decreasing accuracy-vs-cost curve (Kneedle-style).
 
     ``x`` is the communication cost (messages), ``y`` the error. Points are
@@ -17,8 +17,10 @@ def knee_point(x, y):
     vertical distance *below* the chord joining the first and last points.
 
     Returns ``(index_into_original_arrays, x_knee, y_knee)`` or ``None`` when
-    fewer than three distinct points exist or the curve is not convex-decreasing
-    anywhere (no point lies below the chord).
+    fewer than three distinct points exist, when the curve is not
+    convex-decreasing anywhere (no point lies below the chord), or when the
+    total drop of the envelope is smaller than ``min_rel_drop`` of its starting
+    value (a flat curve has no knee).
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -29,6 +31,8 @@ def knee_point(x, y):
     idx = order[keep]
     xs, ys = xs[keep], ys[keep]
     if len(xs) < 3 or xs[-1] <= xs[0] or ys[0] <= ys[-1]:
+        return None
+    if ys[0] <= 0 or (ys[0] - ys.min()) / ys[0] < min_rel_drop:
         return None
     xn = (xs - xs[0]) / (xs[-1] - xs[0])
     yn = (ys - ys[-1]) / (ys[0] - ys[-1])
@@ -92,7 +96,9 @@ def _fmt(v, digits=3):
             return ""
         if math.isinf(v):
             return "inf"
-        if abs(v) >= 1000 or (v != 0 and abs(v) < 1e-3):
+        if abs(v) >= 1000:
+            return f"{v:.0f}"
+        if v != 0 and abs(v) < 1e-3:
             return f"{v:.3g}"
         return f"{v:.{digits}f}".rstrip("0").rstrip(".") if digits > 0 else f"{v:.0f}"
     return str(v)
